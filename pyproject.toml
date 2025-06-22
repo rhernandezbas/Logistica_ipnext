@@ -7,7 +7,14 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.10"
-
+dotenv = "^0.9.9"
+requests = "^2.32.4"
+flask = "^3.1.1"
+flask-marshmallow = "^1.3.0"
+flask-sqlalchemy = "^3.1.1"
+flask-restx = "^1.3.0"
+newrelic = "^10.14.0"
+gunicorn = "^21.2.0"
 
 [build-system]
 requires = ["poetry-core"]
