@@ -1,1 +1,13 @@
 /.idea
+.env
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.python-version
+.coverage
+htmlcov/
+.pytest_cache/
