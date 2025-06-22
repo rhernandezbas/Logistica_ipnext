@@ -1,3 +1,4 @@
+import csv
 import os
 
 from functools import lru_cache
@@ -5,6 +6,8 @@ from functools import lru_cache
 from dotenv import load_dotenv
 import requests
 from app.utils.logger import get_logger
+import chardet
+from app.services.route_optimizer import RouteOptimizer
 
 logger = get_logger(__name__)
 
@@ -30,7 +33,18 @@ class Logistica:
             "chivilco": [],
             "else": []
         }
-
+        self.time = {
+            "instalacion": 1.30,
+            "verificaciones_wirreles": 1,
+            "verificaciones_fibra": 1
+        }
+        
+        # Inicializar el optimizador de rutas
+        self.route_optimizer = RouteOptimizer(
+            google_maps_api_key=self.goole_maps_api_key,
+            default_reference_point=self.default_reference_point,
+            installation_times=self.time
+        )
 
     @lru_cache(maxsize=100)
     def geocode_address(self, address: str) -> dict:
@@ -57,54 +71,24 @@ class Logistica:
             logger.error(f"Exception during geocoding: {str(e)}")
             return {}
 
-    @staticmethod
-    def prioridad_tickets_by_date(tickets: list[dict])->list[dict]:
-        """" """
-        try:
-            sorted_tickets = sorted(tickets, key=lambda x: x["creacion"])
-            logger.info(f"Tickets priorizados: {len(sorted_tickets)} tickets ordenados por antigüedad")
-            return sorted_tickets
-        except Exception as e:
-            logger.error(f"Error al priorizar tickets: {str(e)}")
-            return tickets
-
-    def segmentar_tickets_by_city(self, tickets: list[dict])->dict:
-        """" """
-        try:
-            for ticket in tickets:
-                encontrado = False
-                for city in self.citys.keys():
-                    if city != "else" and city.lower() in ticket['direccion'].lower():
-                        self.citys[city].append(ticket)
-                        encontrado = True
-                        break
-
-                if not encontrado:
-                    self.citys["else"].append(ticket)
-
-            logger.info(f"Tickets segmentados por ciudad: {len(self.citys)} ciudades")
-            return self.citys
-        except Exception as e:
-            logger.error(f"Error al segmentar tickets: {str(e)}")
-            return {}  # Devolvemos un diccionario vacío en caso de error
 
     def calculate_travel_time(self, origin: str, destination: str, consider_traffic: bool = True):
         """
         Calcula el tiempo estimado de viaje entre dos puntos usando la API de Distance Matrix de Google Maps.
         
         Args:
-            origin (str): Coordenadas de origen en formato "latitud,longitud"
-            destination (str): Coordenadas de destino en formato "latitud,longitud"
-            consider_traffic (bool, optional): Si se debe considerar el tráfico actual. Por defecto es True.
+            origin (str): Coordenadas de origen en formato "latitud, longitud"
+            destination (str): Coordenadas de destino en formato "latitud, longitud"
+            consider_traffic (bool, optional): Sí se debe considerar el tráfico actual. Por defecto es True.
             
         Returns:
             dict: Diccionario con información del tiempo de viaje:
                 - duration_seconds: Tiempo en segundos sin considerar tráfico
-                - duration_text: Tiempo formateado sin considerar tráfico (ej: "30 minutos")
+                - duration_text: Tiempo formateado sin considerar tráfico (ej.: "30 minutos")
                 - duration_in_traffic_seconds: Tiempo en segundos considerando tráfico (si se solicitó)
-                - duration_in_traffic_text: Tiempo formateado considerando tráfico (ej: "45 minutos")
+                - duration_in_traffic_text: Tiempo formateado considerando tráfico (ej.: "45 minutos")
                 - distance_meters: Distancia en metros
-                - distance_text: Distancia formateada (ej: "5.2 km")
+                - distance_text: Distancia formateada (ej.: "5.2 km")
         """
         try:
             # Parámetros base
@@ -152,122 +136,105 @@ class Logistica:
             logger.error(f"Exception during travel time calculation: {str(e)}")
             return None
 
-    def segmentar_tickets_by_distance(self):
-        """ """
-
-    def asignar_tecnicos(self,tickets: list):
-        """"""
+    def create_optimized_routes(self, clients: list[dict]) -> dict:
+        """
+        Crea rutas optimizadas para visitar clientes, agrupados por ciudad.
+        
+        Parámetros:
+        - clients: Lista de diccionarios con información de clientes, incluyendo 'direccion'
+        
+        Retorna:
+        - Un diccionario con rutas optimizadas por día, donde cada ruta respeta:
+          - Horario de trabajo: 9:30 a 18:00
+          - 1 hora de almuerzo
+          - Tiempo de instalación según self. Time
+        """
         try:
-            for city in self.citys:
-                if city in tickets:
-                    print(f"asignar_tecnicos a {city}")
-                else:
-                    print(f"no asignar_tecnicos a {city}")
-            return True
+            # Utilizar el optimizador de rutas
+            return self.route_optimizer.optimize_routes(
+                clients=clients,
+                city_mapping=self.citys,
+                geocode_func=self.geocode_address,
+                travel_time_func=self.calculate_travel_time
+            )
         except Exception as e:
-            print(f"Exception while asigning tecnicos: {str(e)}")
-            return False
+            logger.error(f"Error al crear rutas optimizadas: {str(e)}")
+            return {}
 
-tickets = [
-        {
-            "id": 1,
-            "nombre": "Ana María González",
-            "edad": 34,
-            "telefono": "2324-567890",
-            "email": "anamar.gonzalez@email.com",
-            "direccion": "Av. 39 N° 245, chivilcoy, Buenos Aires",
-            "ocupacion": "Contadora",
-            "creacion": "2023-09-12",
-            "distancia": 2
-        },
-        {
-            "id": 2,
-            "nombre": "Carlos Eduardo Ramírez",
-            "edad": 28,
-            "telefono": "2324-456123",
-            "email": "carlos.ramirez85@email.com",
-            "direccion": "Calle 26 N° 156, Mercedes, Buenos Aires",
-            "ocupacion": "Mecánico",
-            "creacion": "2023-02-18"
-        },
-        {
-            "id": 3,
-            "nombre": "María Sol Fernández",
-            "edad": 41,
-            "telefono": "2324-789456",
-            "email": "marisol.fernandez@email.com",
-            "direccion": "Av. 6 N° 89, Mercedes, Buenos Aires",
-            "ocupacion": "Docente",
-            "creacion": "2023-11-25"
-        },
-        {
-            "id": 4,
-            "nombre": "Roberto Daniel López",
-            "edad": 52,
-            "telefono": "2324-321654",
-            "email": "rd.lopez@email.com",
-            "direccion": "Calle 25 N° 312, Mercedes, Buenos Aires",
-            "ocupacion": "Comerciante",
-            "creacion": "2023-04-07"
-        },
-        {
-            "id": 5,
-            "nombre": "Lucía Beatriz Morales",
-            "edad": 29,
-            "telefono": "2324-654987",
-            "email": "lucia.morales@email.com",
-            "direccion": "Av. 12 N° 178, lobos, Buenos Aires",
-            "ocupacion": "Enfermera",
-            "creacion": "2023-01-15"
-        },
-        {
-            "id": 6,
-            "nombre": "Juan Pablo Herrera",
-            "edad": 36,
-            "telefono": "2324-147258",
-            "email": "jp.herrera@email.com",
-            "direccion": "Calle 30 N° 267, Mercedes, Buenos Aires",
-            "ocupacion": "Electricista",
-            "creacion": "2023-12-03"
-        },
-        {
-            "id": 7,
-            "nombre": "Silvana Patricia Díaz",
-            "edad": 45,
-            "telefono": "2324-369741",
-            "email": "silvana.diaz@email.com",
-            "direccion": "Av. San Martín N° 543, Mercedes, Buenos Aires",
-            "ocupacion": "Peluquera",
-            "creacion": "2023-06-21"
-        },
-        {
-            "id": 8,
-            "nombre": "Miguel Ángel Castillo",
-            "edad": 33,
-            "telefono": "2324-852963",
-            "email": "mcastillo@email.com",
-            "direccion": "Calle 23 N° 134, Mercedes, Buenos Aires",
-            "ocupacion": "Programador",
-            "creacion": "2023-03-29"
-        },
-        {
-            "id": 9,
-            "nombre": "Carmen Estela Vega",
-            "edad": 38,
-            "telefono": "2324-741852",
-            "email": "carmen.vega@email.com",
-            "direccion": "Av. Rivadavia N° 421, Mercedes, Buenos Aires",
-            "ocupacion": "Farmacéutica",
-            "creacion": "2023-08-16"
-        },
-        {
-            "id": 10,
-            "nombre": "Diego Sebastián Torres",
-            "edad": 42,
-            "telefono": "2324-963852",
-            "email": "diego.torres@email.com",
-            "direccion": "Calle 28 N° 198, Mercedes, Buenos Aires",
-            "ocupacion": "Veterinario",
-            "creacion": "2023-10-04"
-        }
-    ]
+    @staticmethod
+    def csv_to_user_dict(csv_file_path: str, user_key_field: str = "email") -> list[dict]:
+        """
+        Convierte un archivo CSV en una lista de diccionarios donde cada elemento representa un usuario.
+
+        Args:
+            csv_file_path (str): Ruta al archivo CSV
+            user_key_field (str): Campo que se usará como clave para identificar a cada usuario (por defecto: "email")
+
+        Returns:
+            list: Lista de diccionarios donde cada diccionario contiene los datos de un usuario
+        """
+        try:
+
+            with open(csv_file_path, 'rb') as raw_file:
+                result = chardet.detect(raw_file.read())
+                encoding = result['encoding']
+                confidence = result['confidence']
+
+            logger.info(f"Codificación detectada: {encoding} (confianza: {confidence:.2f})")
+
+            # Lista de codificaciones a probar si la detección automática falla
+            encodings_to_try = [encoding, 'latin-1', 'iso-8859-1', 'windows-1252', 'utf-8']
+
+            user_list = []
+            success = False
+
+            # Intentar con diferentes codificaciones hasta que una funcione
+            for enc in encodings_to_try:
+                try:
+                    with open(csv_file_path, 'r', encoding=enc) as csv_file:
+                        csv_reader = csv.DictReader(csv_file, delimiter=';')
+
+                        for row in csv_reader:
+                            # Verificar si el campo clave existe en la fila
+                            if user_key_field not in row:
+                                logger.warning(f"El campo '{user_key_field}' no existe en la fila: {row}")
+                                # Intentar usar el primer campo como clave si el campo especificado no existe
+                                if len(row) > 0:
+                                    first_key = list(row.keys())[0]
+                                    user_key = row[first_key]
+                                    logger.warning(f"Usando '{first_key}' como clave alternativa: {user_key}")
+                                else:
+                                    continue
+                            else:
+                                user_key = row[user_key_field]
+
+                            # Si la clave está vacía, generar una clave única
+                            if not user_key or user_key.strip() == "":
+                                user_key = f"usuario_{len(user_list) + 1}"
+                                logger.warning(f"Clave vacía, generando clave automática: {user_key}")
+                                row[user_key_field] = user_key
+
+                            # Añadir el diccionario de usuario a la lista
+                            user_list.append(row)
+
+                    success = True
+                    logger.info(f"CSV procesado correctamente con codificación: {enc}")
+                    break
+
+                except UnicodeDecodeError:
+                    logger.warning(f"No se pudo decodificar el archivo con codificación: {enc}")
+                    continue
+
+            if not success:
+                logger.error("No se pudo procesar el archivo CSV con ninguna codificación")
+                return []
+
+            logger.info(f"CSV convertido a lista: {len(user_list)} usuarios procesados")
+            return user_list
+
+        except FileNotFoundError:
+            logger.error(f"No se encontró el archivo CSV: {csv_file_path}")
+            return []
+        except Exception as e:
+            logger.error(f"Error al procesar el archivo CSV: {str(e)}")
+            return []
