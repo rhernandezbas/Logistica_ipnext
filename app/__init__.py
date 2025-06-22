@@ -8,7 +8,7 @@ from app.dummy import dummy
 from app.ping import ping
 from app.routes.logistica import logistica_bp
 from app.utils.logger import get_logger
-from app.utils.config import load_secrets, db, marsmallow
+from app.utils.config import load_secrets, db, marsmallow, Config
 
 logger = get_logger(__name__)
 
@@ -23,8 +23,13 @@ def create_app():
     # load secrets from environment variables
     app.config.update(load_secrets())
     
-    # Comentamos la inicialización de la base de datos temporalmente
-    # db.init_app(app)  # Initialize database
+    # Aplicar configuración de la base de datos
+    app.config.from_object(Config)
+
+    db.init_app(app)
+    marsmallow.init_app(app)
+    
+    logger.info("Conexión a la base de datos configurada")
 
     # accepts both /endpoint and /endpoint/ as valid URLs
     app.url_map.strict_slashes = False

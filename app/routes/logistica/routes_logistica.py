@@ -53,3 +53,17 @@ def upload_csv():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@logistica_bp.route('/get_users', methods=['GET'])
+def get_users():
+    try:
+        logistica = Logistica()
+        user = logistica.prueba_db()
+        if user:
+            user_dict = user.to_dict()
+        else:
+            user_dict = None
+        return jsonify({'user': user_dict}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

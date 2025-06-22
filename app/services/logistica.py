@@ -8,15 +8,16 @@ import requests
 from app.utils.logger import get_logger
 import chardet
 from app.services.route_optimizer import RouteOptimizer
+from app.repositories.logistica_repositories import LogisticaRepository
 
 logger = get_logger(__name__)
 
 class Logistica:
     """ """
-
     def __init__(self):
         """ constructor """
         load_dotenv()
+        self.repository = LogisticaRepository()
         self.goole_maps_api_key = os.getenv("GOOGLE_MAPS_API_KEY")
         self.hf_token = os.getenv("HF_TOKEN")
         self.default_reference_point = "-34.6554574,-59.4324731"
@@ -39,12 +40,26 @@ class Logistica:
             "verificaciones_fibra": 1
         }
         
-        # Inicializar el optimizador de rutas
+
+        use_llm = bool(self.hf_token)
         self.route_optimizer = RouteOptimizer(
             google_maps_api_key=self.goole_maps_api_key,
             default_reference_point=self.default_reference_point,
-            installation_times=self.time
+            installation_times=self.time,
+            use_llm=use_llm
         )
+        
+        if use_llm:
+            logger.info("Optimizador de rutas configurado para usar LLM de Hugging Face")
+        else:
+            logger.info("Optimizador de rutas configurado en modo tradicional (sin LLM)")
+
+
+    def prueba_db(self):
+        """"""
+        data = self.repository.get_user_by_id("1")
+
+        return data
 
     @lru_cache(maxsize=100)
     def geocode_address(self, address: str) -> dict:
@@ -150,10 +165,8 @@ class Logistica:
           - Tiempo de instalación según self. Time
         """
         try:
-            # Utilizar el optimizador de rutas
             return self.route_optimizer.optimize_routes(
                 clients=clients,
-                city_mapping=self.citys,
                 geocode_func=self.geocode_address,
                 travel_time_func=self.calculate_travel_time
             )
