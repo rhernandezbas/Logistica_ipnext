@@ -3,6 +3,7 @@ Módulo para la optimización de rutas de clientes.
 """
 from app.utils.logger import get_logger
 
+
 logger = get_logger(__name__)
 
 class RouteOptimizer:
@@ -11,7 +12,7 @@ class RouteOptimizer:
     restricciones de tiempo, distancias y tipos de instalación.
     """
 
-    def __init__(self, google_maps_api_key, default_reference_point, installation_times):
+    def __init__(self, google_maps_api_key, default_reference_point, installation_times, use_llm=False):
         """
         Constructor para el optimizador de rutas.
         
@@ -19,10 +20,12 @@ class RouteOptimizer:
             google_maps_api_key: API key para Google Maps
             default_reference_point: Punto de referencia inicial para las rutas (lat, lng)
             installation_times: Diccionario con tiempos de instalación según tipo
+            use_llm: Si es True, utiliza un modelo LLM para optimizar las rutas
         """
         self.google_maps_api_key = google_maps_api_key
         self.default_reference_point = default_reference_point
         self.installation_times = installation_times
+        self.use_llm = use_llm
         
         # Constantes de tiempo (en horas)
         self.work_start = 9.5  # 9:30 AM
@@ -30,78 +33,127 @@ class RouteOptimizer:
         self.lunch_break = 1.0  # 1 hora de almuerzo
         self.lunch_threshold = self.work_start + 4  # Umbral para almuerzo (4 horas después del inicio)
     
-    def optimize_routes(self, clients, city_mapping, geocode_func, travel_time_func):
+    def optimize_routes(self, clients, geocode_func, travel_time_func):
         """
-        Crea rutas optimizadas para visitar clientes, agrupados por ciudad.
+        Crea rutas optimizadas para visitar clientes, agrupados por localidad.
         
         Args:
             clients: Lista de diccionarios con información de clientes
-            city_mapping: Diccionario con las ciudades disponibles
             geocode_func: Función para geocodificar direcciones
             travel_time_func: Función para calcular tiempo de viaje
             
         Returns:
-            Un diccionario con rutas optimizadas por día y ciudad
+            Un diccionario con rutas optimizadas por localidad y una lista de usuarios con errores
         """
         try:
-            # Agrupar clientes por ciudad
-            clients_by_city = self._group_clients_by_city(clients, city_mapping)
+            # Agrupar clientes por localidad
+            clients_by_locality, initial_errors = self._group_clients_by_locality(clients)
             
-            # Resultado: rutas optimizadas por día
-            optimized_routes = {}
+            # Si está habilitado el LLM, usar ese método de optimización
+            if self.use_llm:
+                logger.info("Utilizando optimización basada en LLM")
+                
+                # Primero, obtener las coordenadas para todos los clientes
+                clients_by_locality_with_coords = {}
+                all_geolocation_errors = initial_errors.copy() if initial_errors else []
+                
+                for locality, locality_clients in clients_by_locality.items():
+                    clients_with_coords, locality_errors = self._get_clients_with_coordinates(
+                        locality_clients, 
+                        geocode_func, 
+                        travel_time_func
+                    )
+                    
+                    if locality_errors:
+                        all_geolocation_errors.extend(locality_errors)
+                    
+                    if clients_with_coords:
+                        clients_by_locality_with_coords[locality] = clients_with_coords
+                
+                # Usar el optimizador LLM con los clientes que tienen coordenadas
+                optimized_routes = self.llm_optimizer.optimize_routes_with_llm(clients_by_locality_with_coords)
+                
+                # Asegurarse de que los errores de geolocalización estén incluidos
+                if "usuarios_con_errores" in optimized_routes:
+                    optimized_routes["usuarios_con_errores"].extend(all_geolocation_errors)
+                else:
+                    optimized_routes["usuarios_con_errores"] = all_geolocation_errors
+                
+                return optimized_routes
             
-            # Procesar cada ciudad
-            for city, city_clients in clients_by_city.items():
-                logger.info(f"Optimizando rutas para {city} con {len(city_clients)} clientes")
+            # Si no está habilitado el LLM, usar el método tradicional
+            else:
+                logger.info("Utilizando optimización tradicional")
                 
-                # Obtener clientes con coordenadas y ordenados por proximidad
-                clients_with_coords = self._get_clients_with_coordinates(
-                    city_clients, 
-                    geocode_func, 
-                    travel_time_func
-                )
+                # Resultado: rutas optimizadas por localidad
+                optimized_routes = {}
+                all_geolocation_errors = initial_errors.copy() if initial_errors else []
                 
-                # Crear rutas optimizadas para esta ciudad
-                city_routes = self._create_city_routes(
-                    clients_with_coords, 
-                    travel_time_func
-                )
+                # Procesar cada localidad
+                for locality, locality_clients in clients_by_locality.items():
+                    logger.info(f"Optimizando rutas para {locality} con {len(locality_clients)} clientes")
+                    
+                    # Obtener clientes con coordenadas y ordenados por proximidad
+                    clients_with_coords, locality_errors = self._get_clients_with_coordinates(
+                        locality_clients, 
+                        geocode_func, 
+                        travel_time_func
+                    )
+                    
+                    # Agregar errores de esta localidad a la lista general
+                    if locality_errors:
+                        all_geolocation_errors.extend(locality_errors)
+                    
+                    # Crear rutas optimizadas para esta localidad
+                    locality_routes = self._create_city_routes(
+                        clients_with_coords, 
+                        travel_time_func
+                    )
+                    
+                    # Agregar rutas de esta localidad al resultado global con el formato requerido
+                    for i, route in enumerate(locality_routes, 1):
+                        route_key = f"{locality}_ruta_{i}"
+                        optimized_routes[route_key] = route['clients']
                 
-                # Agregar rutas de esta ciudad al resultado global
-                optimized_routes[city] = city_routes
-            
-            logger.info(f"Rutas optimizadas creadas para {len(optimized_routes)} ciudades")
-            return optimized_routes
+                # Agregar lista de usuarios con errores de geolocalización
+                optimized_routes["usuarios_con_errores"] = all_geolocation_errors
+                
+                logger.info(f"Rutas optimizadas creadas para {len(clients_by_locality)} localidades")
+                return optimized_routes
             
         except Exception as e:
             logger.error(f"Error al crear rutas optimizadas: {str(e)}")
-            return {}
+            return {"usuarios_con_errores": []}
     
-    def _group_clients_by_city(self, clients, city_mapping):
+    def _group_clients_by_locality(self, clients):
         """
-        Agrupa los clientes por ciudad según su dirección.
+        Agrupa los clientes por localidad según el campo 'Localidad'.
         
         Args:
             clients: Lista de diccionarios con información de clientes
-            city_mapping: Diccionario con las ciudades disponibles
-            
         Returns:
-            Diccionario con clientes agrupados por ciudad
+            Tupla con (diccionario de clientes agrupados por localidad, lista de clientes con errores)
         """
-        clients_by_city = {}
-        for client in clients:
-            city = "else"
-            # Determinar la ciudad del cliente
-            for city_name in city_mapping.keys():
-                if city_name != "else" and city_name.lower() in client['direccion'].lower():
-                    city = city_name
-                    break
-            
-            if city not in clients_by_city:
-                clients_by_city[city] = []
-            clients_by_city[city].append(client)
+        clients_by_locality = {}
+        initial_errors = []
         
-        return clients_by_city
+        for client in clients:
+            # Determinar la localidad del cliente usando el campo 'Localidad'
+            locality = client.get('Localidad', 'sin_localidad').lower()
+            
+            # Si la localidad está vacía, usar 'sin_localidad'
+            if not locality or locality.strip() == "":
+                locality = 'sin_localidad'
+            
+            # Normalizar el nombre de la localidad para usar como clave
+            locality = locality.replace(" ", "_")
+            
+            if locality not in clients_by_locality:
+                clients_by_locality[locality] = []
+            
+            clients_by_locality[locality].append(client)
+        
+        return clients_by_locality, initial_errors
     
     def _get_clients_with_coordinates(self, clients, geocode_func, travel_time_func):
         """
@@ -109,7 +161,7 @@ class RouteOptimizer:
         al punto de referencia.
         
         Args:
-            clients: Lista de clientes de una ciudad
+            clients: Lista de clientes de una localidad
             geocode_func: Función para geocodificar direcciones
             travel_time_func: Función para calcular tiempo de viaje
             
@@ -117,27 +169,45 @@ class RouteOptimizer:
             Lista de clientes con coordenadas, ordenados por proximidad
         """
         clients_with_coords = []
+        geolocation_errors = []
+        
         for client in clients:
-            # Obtener coordenadas del cliente
-            address = client['direccion']
-            coords = geocode_func(address)
-            
-            if coords and 'latitude' in coords and 'longitude' in coords:
-                client_coords = f"{coords['latitude']},{coords['longitude']}"
+            try:
+                # Obtener coordenadas del cliente
+                address = client['Domicilio']
+                coords = geocode_func(address)
                 
-                # Calcular tiempo de viaje desde el punto de referencia
-                travel_info = travel_time_func(self.default_reference_point, client_coords)
-                
-                if travel_info:
-                    # Guardar información relevante
-                    client_with_coords = client.copy()
-                    client_with_coords['coordinates'] = client_coords
-                    client_with_coords['travel_time_from_start'] = travel_info['duration_seconds'] / 3600  # Convertir a horas
-                    clients_with_coords.append(client_with_coords)
+                if coords and 'latitude' in coords and 'longitude' in coords:
+                    client_coords = f"{coords['latitude']},{coords['longitude']}"
+                    
+                    # Calcular tiempo de viaje desde el punto de referencia
+                    travel_info = travel_time_func(self.default_reference_point, client_coords)
+                    
+                    if travel_info:
+                        # Guardar información relevante
+                        client_with_coords = client.copy()
+                        client_with_coords['coordinates'] = client_coords
+                        client_with_coords['travel_time_from_start'] = travel_info['duration_seconds'] / 3600  # Convertir a horas
+                        clients_with_coords.append(client_with_coords)
+                    else:
+                        # Error al calcular tiempo de viaje
+                        error_client = client.copy()
+                        error_client['error_type'] = 'error_calculo_tiempo_viaje'
+                        geolocation_errors.append(error_client)
+                else:
+                    # Error en geocodificación
+                    error_client = client.copy()
+                    error_client['error_type'] = 'error_geocodificacion'
+                    geolocation_errors.append(error_client)
+            except Exception as e:
+                # Error general
+                error_client = client.copy()
+                error_client['error_type'] = f'error_general: {str(e)}'
+                geolocation_errors.append(error_client)
         
         # Ordenar por tiempo de viaje desde el punto de referencia
         clients_with_coords.sort(key=lambda x: x['travel_time_from_start'])
-        return clients_with_coords
+        return clients_with_coords, geolocation_errors
     
     def _create_city_routes(self, clients, travel_time_func):
         """
